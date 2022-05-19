@@ -92,10 +92,6 @@ class Controller
 	/** Modules */
     
     /**
-     * @var ExtendedSplFixedArray Tokens
-     */
-    private $token_handler;
-    /**
      * @var Simplifier
      */
     private $simplifier;
@@ -183,19 +179,15 @@ class Controller
 			return;
 		}
 		
-		$this->token_handler   = new Tokens();
-        $this->simplifier      = new Simplifier($this->token_handler);
-        $this->strings         = new Strings($this->token_handler);
-        $this->variables       = new Variables($this->token_handler);
-        $this->sqls            = new SQLs($this->token_handler, $this->variables);
-        $this->transformations = new Transformations($this->token_handler);
-        $this->includes        = new Includes($this->token_handler, $this->variables, $this->curr_dir, $this->is_text);
-        $this->evaluations     = new Evaluations($this->token_handler);
-        $this->code_style      = new CodeStyle($this->token_handler);
-        
-		$this->token_handler->getTokensFromText($this->file_content );
-		$this->tokens = &$this->token_handler->tokens;
-  
+		$this->tokens          = new Tokens($this->file_content);
+        $this->simplifier      = new Simplifier($this->tokens);
+        $this->strings         = new Strings($this->tokens);
+        $this->variables       = new Variables($this->tokens);
+        $this->sqls            = new SQLs($this->tokens, $this->variables);
+        $this->transformations = new Transformations($this->tokens);
+        $this->includes        = new Includes($this->tokens, $this->variables, $this->curr_dir, $this->is_text);
+        $this->evaluations     = new Evaluations($this->tokens);
+        $this->code_style      = new CodeStyle($this->tokens);
 	}
 	
 	private function checkFileAccessibility(){
@@ -242,116 +234,104 @@ class Controller
 	 * @return void
 	 */
 	public function processContent(){
-    
-	    $this->token_handler->setMaxKey();
-	    
+        
+        // Analysing code style
+        // Do this, only for initial code
         if( ! $this->evaluations->evaluations ){
             
             $this->code_style->analiseLineLengths($this->file_content);
-    
+            
             foreach( $this->tokens as $key => $current_token ){
-                
-                // Set current token to use it in modules
-                $this->token_handler->newIteration($key);
                 
                 // Counting tokens which are incompatible in one line
                 $this->code_style->searchIncompatibleOnelinedTokens();
                 $this->code_style->sortTokensWithDifferentTypes();
                 
-                if( $this->simplifier->deleteNonCodeTokens($key) ) continue;
-                
+                $this->simplifier->deleteNonCodeTokens($key);
             }
             
-            ExtendedSplFixedArray::reindex( $this->tokens );
+            $this->tokens->reindex();
         }
         
+        //var_dump( $this->tokens);
+        
 	    /**
-         * Deobfuscating
+         * Deobfuscation
          * Repeat until all array with tokens became stable
          */
         do{
             
+            // Create hash to compare the content before and after deobfuscation
             $stamp = $this->createStamp();
-    
+            
             // Skip empty files without PHP code
-            if( ! $this->tokens ){
+            if( empty($this->tokens) ){
                 return;
             }
-            
-            $this->token_handler->setMaxKey();
             
             /** Continue the cycle if the function unset current element */
             foreach( $this->tokens as $key => $current_token ){
                 
-                // Set current token to use it in modules
-                $this->token_handler->newIteration($key);
                 
-                if( $this->simplifier->stripWhitespaces($key) ) continue;
+                if( $this->simplifier->stripWhitespaces($key) ){ continue; }
                 
                 // Strings alterations
-                if( $this->strings->convertToSimple($key) ) continue;
-                if( $this->strings->convertChrFunctionToString($key) ) continue;
-                if( $this->strings->convertHexSymbolsToString($key) ) continue;
-                if( $this->strings->concatenateSimpleStrings($key) ) continue;
-                if( $this->strings->concatenateComplexStrings($key) ) continue;
+                if( $this->strings->convertToSimple($key) )           { continue; }
+                if( $this->strings->convertChrFunctionToString($key) ){ continue; }
+                if( $this->strings->concatenateSimpleStrings($key) )  { continue; }
+                if( $this->strings->concatenateComplexStrings($key) ) { continue; }
+                    $this->strings->convertHexSymbolsToString($key);
                 
-                // Strings actions and alterations
-                if( $this->variables->convertVariableStrings($key) ) continue;
-                if( $this->variables->updateVariables_equation($key) ) continue;
-                if( $this->variables->updateVariables_equationWithConcatenation($key) ) continue;
-                if( $this->variables->updateArray_equation($key) ) continue;
-                if( $this->variables->updateArray_equationShort($key) ) continue;
-                if( $this->variables->updateArray_newElement($key) ) continue;
+                // String actions and alterations
+                if( $this->variables->convertVariableStrings($key) )   { continue; }
+                    $this->variables->updateVariables_equation($key);
+                    $this->variables->updateVariables_equationWithConcatenation($key);
+                    $this->variables->updateArray_equation($key);
+                    $this->variables->updateArray_equationShort($key);
+                    $this->variables->updateArray_newElement($key);
                 
                 // Updating constants
-                if( $this->variables->updateConstants($key) ) continue;
+                $this->variables->updateConstants($key);
                 
                 $this->variables->replace( $key ); // Replaces variables with its content
                 // Executing decoding functions
-                //$this->transformations->decodeData($this->tokens, $key);
-                
-                ExtendedSplFixedArray::reindex( $this->tokens );
+                ////$this->transformations->decodeData($this->tokens, $key);
+                //
+                //ExtendedSplFixedArray::reindex( $this->tokens );
             }
             
-            ExtendedSplFixedArray::reindex( $this->tokens );
+            $this->tokens->reindex();
             
-            $this->variables->concatenate(); // Concatenates variable content if it's possible
+            //$this->variables->concatenate(); // Concatenates variable content if it's possible
             
         }while( $stamp !== $this->createStamp() );
         
-        ExtendedSplFixedArray::reindex( $this->tokens );
-        
 		// Mark evaluation as safe if it matches conditions
-		if( $this->is_evaluation &&
-		    (
-			    // Only output
-                (isset( $this->tokens[1][0] ) && in_array($this->tokens[1][0], $this->output_constructs, true ) ) ||
-                // Empty
-                (count( $this->tokens ) === 1 ) ||
-                // Doesn't have a bad variables
-                ! $this->variables->variables_bad
-		    )
-		){
-			$this->looks_safe = true;
-			
-			return;
-		}
+		//if( $this->is_evaluation &&
+		//    (
+		//	    // Only output
+        //        (isset( $this->tokens[1][0] ) && in_array($this->tokens[1][0], $this->output_constructs, true ) ) ||
+        //        // Empty
+        //        (count( $this->tokens ) === 1 ) ||
+        //        // Doesn't have a bad variables
+        //        ! $this->variables->variables_bad
+		//    )
+		//){
+		//	$this->looks_safe = true;
+		//
+		//	return;
+		//}
         
         // Detecting bad variables
         $this->variables->detectBad();
 		
         /** Gather the results of scanning */
         foreach( $this->tokens as $key => $current_token ){
-            // Set current token to use it in modules
-            $this->token_handler->newIteration($key);
     
             // Getting all include constructions and detecting bad
-            if( $this->includes->standardize($this->tokens, $key) ){
-                ExtendedSplFixedArray::reindex($this->tokens);
-                $this->token_handler->setIterationTokens();
-            }
+            //if( $this->includes->standardize($this->tokens, $key) ){ continue; }
             
-            $this->includes->get($this->tokens, $key);
+            //$this->includes->get($this->tokens, $key);
     
             // Getting all MySQL requests and detecting bad
             $this->sqls->getViaFunctions($key);
@@ -386,7 +366,7 @@ class Controller
 	}
     
     private function createStamp(){
-	    return md5($this->token_handler->glueTokens());
+	    return md5($this->tokens->glueTokens());
     }
     
 	public function make_verdict()
@@ -397,8 +377,8 @@ class Controller
                 if(
                     in_array( $lexem[1], $set_of_functions, true ) &&
                     ! (
-                        $this->token_handler->isInGroup( array( 'T_OBJECT_OPERATOR' ), $this->token_handler->getToken( 'prev', 1, $key) ) ||
-                        $this->token_handler->isInGroup( array( 'T_FUNCTION' ),        $this->token_handler->getToken( 'prev', 1, $key) )
+                        $this->tokens->isInGroup( array( 'T_OBJECT_OPERATOR' ), $this->tokens->getToken( 'prev', 1, $key) ) ||
+                        $this->tokens->isInGroup( array( 'T_FUNCTION' ),        $this->tokens->getToken( 'prev', 1, $key) )
                     )
                 ){
                     $found_malware_key                     = array_search( $lexem[1], $set_of_functions, true );
@@ -411,9 +391,9 @@ class Controller
 		foreach($this->includes->includes as $include){
 			if($include['status'] === false){
 				if($include['not_url'] === false && $include['ext_good'] === false){
-                    $this->verdict['CRITICAL'][$include['string']][] = substr($this->token_handler->glueTokens($include['include']), 0, 255);
+                    $this->verdict['CRITICAL'][$include['string']][] = substr($this->tokens->glueTokens($include['include']), 0, 255);
                 }elseif($include['good'] === false){
-                    $this->verdict['SUSPICIOUS'][$include['string']][] = substr($this->token_handler->glueTokens($include['include']), 0, 255);
+                    $this->verdict['SUSPICIOUS'][$include['string']][] = substr($this->tokens->glueTokens($include['include']), 0, 255);
                 }
 			}
 		}
@@ -421,12 +401,12 @@ class Controller
 		// Adding bad sql to $verdict['SEVERITY']['string_num'] = 'whole string with sql'
 		foreach($this->sqls->requests as $sql){
 			if($sql['status'] === false){
-				$this->verdict['SUSPICIOUS'][$sql['string']][] = substr($this->token_handler->glueTokens($sql['sql']), 0, 255);
+				$this->verdict['SUSPICIOUS'][$sql['string']][] = substr($this->tokens->glueTokens($sql['sql']), 0, 255);
 			}
 		}
   
 		// Detecting JavaScript injection in HTML
-        $html_analyser = new HTML($this->token_handler);
+        $html_analyser = new HTML($this->tokens);
         $html_analyser->analise();
 		if( $html_analyser->result ){
             $this->verdict['SUSPICIOUS'][ $html_analyser->result[2] ][] = 'inappropriate_html';

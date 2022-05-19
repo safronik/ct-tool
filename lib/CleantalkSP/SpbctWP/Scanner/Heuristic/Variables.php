@@ -4,6 +4,9 @@
 namespace CleantalkSP\SpbctWP\Scanner\Heuristic;
 
 
+use CleantalkSP\SpbctWP\Scanner\Heuristic\DataStructures\Token;
+use CleantalkSP\DataStructures\ExtendedSplFixedArray;
+
 class Variables
 {
     public $variables     = array();
@@ -30,7 +33,7 @@ class Variables
             array( '__SERV', '(', ),
             array( 'T_CONSTANT_ENCAPSED_STRING' ),
             array( '__SERV', ',', ),
-            array( 'T_CONSTANT_ENCAPSED_STRING' )
+            array( array('T_CONSTANT_ENCAPSED_STRING', 'T_LNUMBER') )
         ),
         
         'array_equation_array' => array(
@@ -65,16 +68,18 @@ class Variables
     public function convertVariableStrings($key)
     {
         if(
-            $this->tokens->isCurrentEqualTo('$') &&
-            $this->tokens->isNextEqualTo('{') &&
-            $this->tokens->isNextTypeOf('T_CONSTANT_ENCAPSED_STRING', 2)
+            $this->tokens->current->value === '$' &&
+            $this->tokens->next1->value === '{' &&
+            $this->tokens->next2->type === 'T_CONSTANT_ENCAPSED_STRING'
         ){
-            $this->tokens->tokens[$key] = array(
+            $this->tokens->tokens[$key] = new Token(
                 'T_VARIABLE',
-                '$' . trim($this->tokens->next2[1], '\'"'),
-                $this->tokens->next2[2],
+                '$' . trim($this->tokens->next2->value, '\'"'),
+                $this->tokens->current->line
             );
             $this->tokens->unsetTokens('next1','next2','next3');
+            
+            return true;
         }
         
         return false;
@@ -86,24 +91,57 @@ class Variables
      *
      * @param int     $key
      *
-     * @return false Always returns false, because it doesn't unset current element
+     * @return false Always returns false, because it doesn't unset any elements
      */
     public function updateArray_equation($key)
     {
-        if( $this->tokens->checkSequenceFromPosition($key + 1, $this->sequences['array_equation_array']) ){
-            $variable_end = $this->tokens->searchForward($key, ';') - 1;
-            if( $variable_end ){
-                $arr_tokens = $this->tokens->getRange($key + 4, $variable_end - 1);
-                foreach( $arr_tokens as $array_token ){
-                    if( $this->tokens->isInGroup(array('T_CONSTANT_ENCAPSED_STRING', 'T_LNUMBER'), $array_token) ){
-                        $this->arrays[ $this->tokens->current[1] ][] = array(
-                            $array_token[0],
-                            $array_token[1],
-                            $array_token[2],
-                        );
-                    }
-                }
+        // Check the sequence for array equation
+        if( ! $this->tokens->checkSequenceFromPosition($key + 1, $this->sequences['array_equation_array']) ){
+            return false;
+        }
+            
+        // Get end of array equation
+        $variable_end = $this->tokens->searchForward($key, ';') - 1;
+        if( ! $variable_end ){
+            return false;
+        }
+        
+        // Get all tokens of the array
+        $array_tokens = $this->tokens->getRange($key + 4, $variable_end - 1);
+        if( ! $array_tokens ){
+            return false;
+        }
+        
+        for(
+            $i = 0;
+            $arr_key = null, $arr_value = null, isset( $array_tokens[ $i ]);
+            $arr_key = null, $arr_value = null, $i++
+        ){
+            
+            // Case: [ 'a' => 'b' ] or [ 1 => 'b' ]
+            if(
+                isset($array_tokens[ $i + 1 ]) && $array_tokens[ $i + 1 ]->type === 'T_DOUBLE_ARROW' &&
+                $array_tokens[ $i ]->isTypeOf( 'array_allowed_keys')
+            ){
+                $arr_key   = trim($array_tokens[ $i ]->value, '\'"');
+                $arr_value = $array_tokens[ $i + 2 ];
+                $i += 2; // Skip
+                
+            // Case: [ 'a', 'b', 'c' ]
+            }elseif( $array_tokens[ $i ]->isTypeOf( 'array_allowed_values' ) ){
+                $arr_key   = isset($this->arrays[ $this->tokens->current->value ])
+                    ? count( $this->arrays[ $this->tokens->current->value ])
+                    : 0;
+                $arr_value = $array_tokens[ $i ];
             }
+            
+            if( $arr_key && $arr_value ){
+                $array[ $arr_key ] = $arr_value;
+            }
+        }
+        
+        if( isset($array) ){
+            $this->arrays[ $this->tokens->current->value ] = $array;
         }
         
         return false;
@@ -119,20 +157,50 @@ class Variables
      */
     public function updateArray_equationShort($key)
     {
-        if( $this->tokens->checkSequenceFromPosition($key + 1, $this->sequences['array_equation_square_brackets']) ){
-            $variable_end = $this->tokens->searchForward($key, ';') - 1;
-            if( $variable_end ){
-                $array_tokens = $this->tokens->getRange($key + 3, $variable_end - 1);
-                foreach( $array_tokens as $array_token ){
-                    if( $this->tokens->isInGroup(array('T_CONSTANT_ENCAPSED_STRING', 'T_LNUMBER'), $array_token) ){
-                        $this->arrays[ $this->tokens->current[1] ][] = array(
-                            'T_CONSTANT_ENCAPSED_STRING',
-                            $array_token[1],
-                            $array_token[2]
-                        );
-                    }
-                }
+        if( ! $this->tokens->checkSequenceFromPosition($key + 1, $this->sequences['array_equation_square_brackets']) ){
+            return false;
+        }
+        
+        $variable_end = $this->tokens->searchForward($key, ';') - 1;
+        if( ! $variable_end ){
+            return false;
+        }
+        
+        // Get all tokens of the array
+        $array_tokens = $this->tokens->getRange($key + 3, $variable_end - 1);
+        if( ! $array_tokens ){
+            return false;
+        }
+        
+        for(
+            $i = 0;
+            $arr_key = null, $arr_value = null, isset( $array_tokens[ $i ]);
+            $arr_key = null, $arr_value = null, $i++
+        ){
+            // Case: [ 'a' => 'b' ] or [ 1 => 'b' ]
+            if(
+                isset($array_tokens[ $i + 1 ]) && $array_tokens[ $i + 1 ]->type === 'T_DOUBLE_ARROW' &&
+                $array_tokens[ $i ]->isTypeOf( 'array_allowed_keys')
+            ){
+                $arr_key   = trim($array_tokens[ $i ]->value, '\'"');
+                $arr_value = $array_tokens[ $i + 2 ];
+                $i += 2; // Skip
+                
+            // Case: [ 'a', 'b', 'c' ]
+            }elseif( $array_tokens[ $i ]->isTypeOf( 'array_allowed_values' ) ){
+                $arr_key   = isset($this->arrays[ $this->tokens->current->value ])
+                    ? count( $this->arrays[ $this->tokens->current->value ])
+                    : 0;
+                $arr_value = $array_tokens[ $i ];
             }
+            
+            if( $arr_key && $arr_value ){
+                $array[ $arr_key ] = $arr_value;
+            }
+        }
+        
+         if( isset($array) ){
+            $this->arrays[ $this->tokens->current->value ] = $array;
         }
         
         return false;
@@ -149,9 +217,9 @@ class Variables
     public function updateArray_newElement($key)
     {
         if(
-            $this->tokens->isNextEqualTo('[') &&
-            $this->tokens->isNextEqualTo(']', 2) &&
-            $this->tokens->isNextEqualTo('=', 3)
+            $this->tokens->next1->value === '[' &&
+            $this->tokens->next2->value === ']' &&
+            $this->tokens->next3->value === '='
         ){
             $var_temp = $this->tokens->getRange(
                 $key + 4,
@@ -160,8 +228,8 @@ class Variables
             
             if( $var_temp !== false && count( $var_temp ) ){
                 $var_temp = $var_temp[0];
-                if( $this->tokens->isInGroup(array('T_CONSTANT_ENCAPSED_STRING', 'T_LNUMBER'), $var_temp) ){
-                    $this->arrays[ $this->tokens->current[1] ][] = array(
+                if( $var_temp->isTypeOf( 'array_allowed_values') ){
+                    $this->arrays[ $this->tokens->current->value ][] = array(
                         $var_temp[0],
                         $var_temp[1],
                         $var_temp[2],
@@ -186,17 +254,31 @@ class Variables
         // Simple equation
         // $a = 'value';
         if(
-            $this->tokens->isCurrentTypeOf('T_VARIABLE') &&
-            $this->tokens->isNextEqualTo('=')
+            $this->tokens->current->type  === 'T_VARIABLE' &&
+            $this->tokens->next1  ->value === '='
         ){
             $variable_end = $this->tokens->searchForward($key, ';') - 1;
             if($variable_end){
-                $var_temp = $this->tokens->getRange($key + 2, $variable_end);
-                $var_temp = count($var_temp) === 3 && $var_temp[0] === '"' &&  $var_temp[1][0] === 'T_ENCAPSED_AND_WHITESPACE' && $var_temp[2] === '"'
-                    ? array( array( 'T_CONSTANT_ENCAPSED_STRING', '\'' . $var_temp[1][1] . '\'', $var_temp[1][2] ) )// Variable in a double quotes like $a = "$b";
-                    : $var_temp; // // Variable in a single quotes like $a = 'value';
+                
+                $variable_tokens = $this->tokens->getRange($key + 2, $variable_end);
+                
+                if(
+                    count($variable_tokens) === 3 &&
+                    $variable_tokens[0]->value === '"' &&
+                    $variable_tokens[1]->type === 'T_ENCAPSED_AND_WHITESPACE' &&
+                    $variable_tokens[2]->value === '"'
+                ){
+                    $variable_tokens = array( new Token(
+                        'T_CONSTANT_ENCAPSED_STRING',
+                        '\'' . $variable_tokens[1]->value . '\'',
+                        $variable_tokens[1]->line
+                    ) );
+                }
+                
+                // Variable in a single quotes like $a = 'value';
             
-                $this->variables[ $this->tokens->current[1] ] = $var_temp;
+                $this->variables[ $this->tokens->current->value ] = $variable_tokens;
+                //var_dump( $this->variables);
             }
         }
         
@@ -204,47 +286,50 @@ class Variables
     }
     
     /**
-     * Equation with concatenation.
-     * $a .= 'value';
+     * Equation with concatenation. $a .= 'value';
+     * Adding right expression to the appropriate variable
      *
      * @param int $key
      *
-     * @return true returns false if current token( $tokens[ $key ] ) was unset or true if isn't
+     * @return false always return false
      */
     public function updateVariables_equationWithConcatenation($key)
     {
         if(
-            $this->tokens->isCurrentTypeOf('T_VARIABLE') &&
-            $this->tokens->isNextTypeOf('T_CONCAT_EQUAL')
+            $this->tokens->current->type === 'T_VARIABLE' &&
+            $this->tokens->next1  ->type === 'T_CONCAT_EQUAL'
         ){
             
-            $var_temp = $this->tokens->getRange(
+            $tokens_of_variable = $this->tokens->getRange(
                 $key + 2,
                 $this->tokens->searchForward($key, ';') - 1
             );
             
-            if( $var_temp ){
+            if( $tokens_of_variable ){
                 
                 // Variable in a double quotes like $a .= "$b";
                 // We don't touch variables in a single quotes like $a .= 'value';
                 if(
-                    count( $var_temp ) === 3 &&
-                    $this->tokens->isTokenEqualTo($var_temp[0], '"') &&
-                    $this->tokens->isTokenEqualTo($var_temp[2], '"') &&
-                    $this->tokens->isTypeOf('T_ENCAPSED_AND_WHITESPACE', $var_temp[1])
+                    count( $tokens_of_variable ) === 3 &&
+                    $tokens_of_variable[0]->value === '"' &&
+                    $tokens_of_variable[1]->type  === 'T_ENCAPSED_AND_WHITESPACE' &&
+                    $tokens_of_variable[2]->value === '"'
                 ){
-                    $var_temp = array(
-                        array(
+                    $tokens_of_variable = array(
+                        new Token(
                             'T_CONSTANT_ENCAPSED_STRING',
-                            '\'' . $var_temp[1][1] . '\'',
-                            $var_temp[1][2],
+                            '\'' . $tokens_of_variable[1]->value . '\'',
+                            $tokens_of_variable[1]->line
                         ),
                     );
                 }
-
-                $this->variables[ $this->tokens->current[1] ] = isset( $this->variables[ $this->tokens->current[1] ] )
-                    ? array_merge($this->variables[ $this->tokens->current[1] ], $var_temp)
-                    : $var_temp;
+                
+                // If the variable exists
+                if( isset( $this->variables[ $this->tokens->current->value ] ) ){
+                    $this->variables[ $this->tokens->current->value ]->append($tokens_of_variable);
+                }else{
+                    $this->variables[ $this->tokens->current->value ] = ExtendedSplFixedArray::fromArray($tokens_of_variable);
+                }
             }
         }
         
@@ -261,13 +346,12 @@ class Variables
      */
     public function updateConstants($key)
     {
-        // Constants
         if(
-            $this->tokens->isNextTypeOf('T_CONSTANT_ENCAPSED_STRING', 4) &&
+            $this->tokens->current->value === 'define' &&
             $this->tokens->checkSequenceFromPosition($key, $this->sequences['define_constant'] )
         ){
-            $constant_name = trim( $this->tokens->next2[1], '\'"' );
-            $this->constants[ $constant_name ] = trim( $this->tokens->next4[1], '\'"' );
+            $constant_name = trim( $this->tokens->next2->value, '\'"' );
+            $this->constants[ $constant_name ] = trim( $this->tokens->next4->value, '\'"' );
         }
         
         return false;
@@ -304,35 +388,37 @@ class Variables
     public function replace($key)
     {
             // Replace variable
-            if( $this->tokens->isCurrentTypeOf('T_VARIABLE') ){
+            if( $this->tokens->current->type === 'T_VARIABLE' ){
+                
+                $variable_name = $this->tokens->current->value;
                 
                 // Arrays
                 if( $this->isTokenInArrays($this->tokens->current) ){
                     
                     // Array element
                     if(
-                        $this->tokens->isNextEqualTo('[') &&
-                        $this->tokens->isNextTypeOf('T_LNUMBER') &&
-                        $this->tokens->isNextEqualTo(array('.', '(', ';'), 3)
+                        $this->tokens->next1->value === '[' &&
+                        $this->tokens->next1->type === 'T_LNUMBER' &&
+                        $this->tokens->next3->isValueIn( [ '.', '(', ';' ] )
                     ){
-                        if( isset($this->arrays[ $this->tokens->current[1] ][ $this->tokens->next1[1][1] ][1]) ){
-                            if( $this->tokens->isNextEqualTo('(', 3) ){
-                                $this->tokens->tokens[$key] = array(
+                        if( isset($this->arrays[ $variable_name ][ $this->tokens->next1->value[1] ][1]) ){
+                            if( $this->tokens->next3->value === '(' ){
+                                $this->tokens->tokens[$key] = new Token(
                                     'T_STRING',
-                                    substr($this->arrays[ $this->tokens->current[1] ][ $this->tokens->next1[1][1] ][1], 1, -1),
-                                    $this->tokens->current[2],
+                                    substr($this->arrays[ $variable_name ][ $this->tokens->next1->value[1] ][1], 1, -1),
+                                    $this->tokens->current->line
                                 );
-                            }elseif( $this->tokens->isNextEqualTo('.', 3) ){
-                                $this->tokens->tokens[$key] = array(
+                            }elseif( $this->tokens->next3->value === '.' ){
+                                $this->tokens->tokens[$key] = new Token(
                                     'T_CONSTANT_ENCAPSED_STRING',
-                                    '\'' . $this->arrays[ $this->tokens->current[1] ][ $this->tokens->next1[1][1] ][1] . '\'',
-                                    $this->tokens->current[2],
+                                    '\'' . $this->arrays[ $variable_name ][ $this->tokens->next1->value[1] ][1] . '\'',
+                                    $this->tokens->current->line
                                 );
                             }else{
-                                $this->tokens->tokens[$key] = array(
-                                    $this->arrays[ $this->tokens->current[1] ][ $this->tokens->next1[1][1] ][0],
-                                    '\'' . $this->arrays[ $this->tokens->current[1] ][ $this->tokens->next1[1][1] ][1] . '\'',
-                                    $this->tokens->current[2],
+                                $this->tokens->tokens[$key] = new Token(
+                                    $this->arrays[ $variable_name ][ $this->tokens->next1->value[1] ][0],
+                                    '\'' . $this->arrays[ $variable_name ][ $this->tokens->next1->value[1] ][1] . '\'',
+                                    $this->tokens->current->line
                                 );
                             }
                             
@@ -343,22 +429,22 @@ class Variables
                 // Variables
                 }elseif(
                     $this->isTokenInVariables($this->tokens->current) &&
-                    count($this->variables[ $this->tokens->current[1] ]) === 1 &&
-                    in_array($this->variables[ $this->tokens->current[1] ][0][0], $this->variables_types_to_concat, true)
+                    count($this->variables[ $variable_name ]) === 1 &&
+                    in_array($this->variables[ $variable_name ][0][0], $this->variables_types_to_concat, true)
                 ){
                     // Array or symbol from string replacement
                     if(
-                        $this->tokens->isNextEqualTo(array('[', '{') ) &&
-                        $this->tokens->isNextTypeOf('T_LNUMBER', 2)
+                        $this->tokens->next2->type === 'T_LNUMBER' &&
+                        $this->tokens->next1->isValueIn( [ '[', '{' ] )
                     ){
                         if( isset(
-                            $this->variables[ $this->tokens->current[1] ][0][1][ $this->tokens->next2[1] ],
-                            $this->variables[ $this->tokens->current[1] ][0][1][ $this->tokens->next2[1] + 1]
+                            $this->variables[ $variable_name ][0][1][ $this->tokens->next2->value ],
+                            $this->variables[ $variable_name ][0][1][ $this->tokens->next2->value + 1]
                         ) ){
-                            $this->tokens->tokens[$key] = array(
+                            $this->tokens->tokens[$key] = new Token(
                                 'T_CONSTANT_ENCAPSED_STRING',
-                                '\'' . $this->variables[$this->tokens->current[1]][0][1][ $this->tokens->next2[1] + 1] . '\'',
-                                $this->tokens->current[2],
+                                '\'' . $this->variables[ $variable_name ][0][1][ $this->tokens->next2->value + 1] . '\'',
+                                $this->tokens->current->line
                             );
                             $this->tokens->unsetTokens('next1', 'next2', 'next3');
                         }
@@ -370,18 +456,18 @@ class Variables
                     }else{
                         
                         // Variables function
-                        if( $this->tokens->isNextEqualTo('(') ){
-                            $this->tokens->tokens[ $key ] = array(
+                        if( $this->tokens->next1->value === '(' ){
+                            $this->tokens->tokens[ $key ] = new Token(
                                 'T_STRING',
-                                substr($this->variables[$this->tokens->current[1]][0][1], 1, -1),
-                                $this->tokens->current[2],
+                                substr($this->variables[ $variable_name ][0][1], 1, -1),
+                                $this->tokens->current->line
                             );
                             // Variables in double/single quotes
-                        }elseif( ! $this->tokens->isNextTokenTypeOfGroup('equation') ){
-                            $this->tokens->tokens[ $key ] = array(
-                                ! $this->tokens->isPrevEqualTo('"') ? 'T_CONSTANT_ENCAPSED_STRING' : 'T_ENCAPSED_AND_WHITESPACE',
-                                ! $this->tokens->isPrevEqualTo('"') ? $this->variables[$this->tokens->current[1]][0][1] : substr($this->variables[$this->tokens->current[1]][0][1],1,-1),
-                                $this->tokens->current[2],
+                        }elseif( ! $this->tokens->next1->isTypeOf('equation') ){
+                            $this->tokens->tokens[ $key ] = new Token(
+                                ! $this->tokens->prev1->value === '"' ? 'T_CONSTANT_ENCAPSED_STRING' : 'T_ENCAPSED_AND_WHITESPACE',
+                                ! $this->tokens->prev1->value === '"' ? $this->variables[ $variable_name ][0][1] : substr($this->variables[ $variable_name ][0][1],1,-1),
+                                $this->tokens->current->line
                             );
                         }
                     }
@@ -390,10 +476,10 @@ class Variables
             // Constant replacement
             // @todo except cases when name of constant equal to something. Check type and siblings tokens
             }elseif( $this->isTokenInConstants($this->tokens->current) ){
-                $this->tokens->tokens[$key] = array(
+                $this->tokens->tokens[$key] = new Token(
                     'T_CONSTANT_ENCAPSED_STRING',
-                    '\'' . $this->constants[$this->tokens->current[1]] . '\'',
-                    $this->tokens->current[2],
+                    '\'' . $this->constants[ $this->tokens->current->value ] . '\'',
+                    $this->tokens->current->line
                 );
             }
     }
@@ -454,7 +540,7 @@ class Variables
      */
     public function isTokenInArrays($token)
     {
-        return $this->tokens->isTypeOf('T_VARIABLE', $token) && isset($this->arrays[$token[1]]);
+        return $token->type === 'T_VARIABLE' && isset($this->arrays[ $token->value ]);
     }
     
     /**
@@ -466,7 +552,7 @@ class Variables
      */
     public function isTokenInVariables($token)
     {
-        return $this->tokens->isTypeOf('T_VARIABLE', $token) && isset($this->variables[$token[1]]);
+        return $token->type === 'T_VARIABLE' && isset($this->variables[ $token->value ]);
     }
     
     /**
@@ -478,6 +564,6 @@ class Variables
      */
     public function isTokenInConstants($token)
     {
-        return $this->tokens->isTypeOf('T_STRING', $token) && isset($this->constants[$token[1]]);
+        return $token->type === 'T_STRING' && isset($this->constants[ $token->value ]);
     }
 }

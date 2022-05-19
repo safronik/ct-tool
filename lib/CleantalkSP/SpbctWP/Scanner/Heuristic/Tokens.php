@@ -5,6 +5,7 @@ namespace CleantalkSP\SpbctWP\Scanner\Heuristic;
 
 
 use CleantalkSP\DataStructures\ExtendedSplFixedArray;
+use CleantalkSP\SpbctWP\Scanner\Heuristic\DataStructures\Token;
 
 /**
  * Array with token
@@ -14,20 +15,22 @@ use CleantalkSP\DataStructures\ExtendedSplFixedArray;
  *    2 => (int)    DOCUMENT_STRING_NUMBER
  * ]
  *
- * @property array|null prev4
- * @property array|null prev3
- * @property array|null prev2
- * @property array|null prev1
- * @property array|null current
- * @property array|null next1
- * @property array|null next2
- * @property array|null next3
- * @property array|null next4
+ * @property Token|null $prev4
+ * @property Token|null $prev3
+ * @property Token|null $prev2
+ * @property Token|null $prev1
+ * @property Token|null $current
+ * @property Token|null $next1
+ * @property Token|null $next2
+ * @property Token|null $next3
+ * @property Token|null $next4
  */
-class Tokens
+class Tokens implements \Iterator
 {
+    private $position = 0;
+    
     /**
-     * @var ExtendedSplFixedArray of arrays with tokens with PHP code
+     * @var ExtendedSplFixedArray of \CleantalkSP\SpbctWP\Scanner\Heuristic\DataStructures\Token
      * [
      *    0 => (string) TOKEN_TYPE,
      *    1 => (mixed)  TOKEN_VALUE
@@ -60,144 +63,18 @@ class Tokens
      *    2 => (int)    DOCUMENT_STRING_NUMBER
      * ]
      */
-    public $html     = array();
+    public $html = array();
     
     /**
-     * @var string[] Current token
+     * @var TokenGroups
      */
-    public $current;
+    private $groups;
     
-    /**
-     * @var int
-     */
-    private $current_key;
-    
-    public $equation__token_group = array(
-        '=',
-        'T_CONCAT_EQUAL',
-        'T_MINUS_EQUAL',
-        'T_MOD_EQUAL',
-        'T_MUL_EQUAL',
-        'T_AND_EQUAL',
-        'T_OR_EQUAL',
-        'T_PLUS_EQUAL',
-        'T_POW_EQUAL',
-        'T_SL_EQUAL',
-        'T_SR_EQUAL',
-        'T_XOR_EQUAL',
-    );
-    
-    /**
-     * @var string[] non PHP tokens
-     */
-    private $non_code__token_group = array(
-        'T_INLINE_HTML',
-        'T_COMMENT',
-        'T_DOC_COMMENT',
-    );
-    
-    /**
-     * @var string[] non PHP tokens
-     */
-    private $html__token_group = array(
-        'T_INLINE_HTML',
-    );
-    
-    /**
-     * @var string[] non PHP tokens
-     */
-    private $comments__token_group = array(
-        'T_COMMENT',
-        'T_DOC_COMMENT',
-    );
-    
-    /**
-     * @var string[] trimming whitespaces around this tokens
-     */
-    private $strip_whitespace_around__token_group  = array(
-        
-        '__SERV', // Tokens without type
-        
-        'T_WHITESPACE', // /\s*/
-        'T_CLOSE_TAG',
-        'T_CONSTANT_ENCAPSED_STRING', // String in quotes
-        
-        // Equals
-        'T_DIV_EQUAL',
-        'T_BOOLEAN_OR',
-        'T_BOOLEAN_AND',
-        'T_IS_EQUAL',
-        'T_IS_GREATER_OR_EQUAL',
-        'T_IS_IDENTICAL',
-        'T_IS_NOT_EQUAL',
-        'T_IS_SMALLER_OR_EQUAL',
-        'T_SPACESHIP',
-        
-        // Assignments
-        'T_CONCAT_EQUAL',
-        'T_MINUS_EQUAL',
-        'T_MOD_EQUAL',
-        'T_MUL_EQUAL',
-        'T_AND_EQUAL',
-        'T_OR_EQUAL',
-        'T_PLUS_EQUAL',
-        'T_POW_EQUAL',
-        'T_SL_EQUAL',
-        'T_SR_EQUAL',
-        'T_XOR_EQUAL',
-        
-        // Bit
-        'T_SL', // <<
-        'T_SR', // >>
-        
-        // Uno
-        'T_INC', // ++
-        'T_DEC', // --
-        'T_POW', // **
-        
-        // Cast type
-        'T_ARRAY_CAST',
-        'T_BOOL_CAST',
-        'T_DOUBLE_CAST',
-        'T_OBJECT_CAST',
-        'T_STRING_CAST',
-        
-        // Different
-        'T_START_HEREDOC', // <<<
-        'T_NS_SEPARATOR', // \
-        'T_ELLIPSIS', // ...
-        'T_OBJECT_OPERATOR', // ->
-        'T_DOUBLE_ARROW', // =>
-        'T_DOUBLE_COLON', // ::
-        'T_PAAMAYIM_NEKUDOTAYIM', // ::
-    );
-    
-    private $dont_trim_whitespace_around__token_group = array(
-        'T_ENCAPSED_AND_WHITESPACE',
-        'T_OPEN_TAG',
-    );
-    
-    private $include__token_group = array(
-        'T_INCLUDE',
-        'T_REQUIRE',
-        'T_INCLUDE_ONCE',
-        'T_REQUIRE_ONCE',
-    );
-    
-    private $one_line__token_group = array(
-        'T_NAMESPACE',
-        'T_CLASS',
-        'T_TRAIT',
-        'T_PUBLIC',
-        'T_PROTECTED',
-        'T_PRIVATE',
-        'T_FUNCTION',
-        'T_FOREACH',
-        'T_FOR',
-        'T_DO',
-        'T_WHILE',
-        'T_SWITCH',
-    );
+    public function __construct( $content )
+    {
+        $this->groups = new TokenGroups();
+        $this->getTokensFromText($content);
+    }
     
     /**
      * Parse code and transform it to array of arrays with token like
@@ -214,7 +91,7 @@ class Tokens
      *
      * @param $text
      *
-     * @return mixed
+     * @return void
      */
     public function getTokensFromText( $text )
     {
@@ -236,37 +113,32 @@ class Tokens
     private function convertTokensToStandard()
     {
         // We are using for instead of foreach because we might stumble on SplFixedArray.
-        // SplFixedArray doesn't support passing element by reference if for cycles.
-        for( $prev_token[2] = 1, $key = 0, $length = count($this->tokens); $key < $length; $key++ ){
+        // SplFixedArray doesn't support passing element by reference in 'for' cycles.
+        for(
             
-            $token = $this->tokens[$key]; // Set current iteration token
+            // Initialization
+            $key             = 0,
+            $prev_token_line = 1,
+            $length          = count($this->tokens);
             
-            if( is_scalar($token) ){
-                $type   = '__SERV';
-                $value  = $token;
-                $string = $prev_token[2];
-            }else{
-                $type   = token_name($token[0]);
-                $value  = $token[1];
-                $string = $token[2];
-            }
+            // Before each iteration
+            $key < $length;
             
-            $this->tokens[ $key ] = ExtendedSplFixedArray::createFromArray( array($type, $value, $string) );
-            $prev_token           = $this->tokens[$key]; // Set previous token to compile next service(__SERV) tokens
+            // After each iteration
+            $prev_token_line = $this->tokens[$key]->line, // Set previous token to compile next service(__SERV) tokens
+            $key++
+        ){
+            
+            $curr_token = $this->tokens[$key]; // Set current iteration token
+            
+            $this->tokens[ $key ] = is_scalar($curr_token)
+                ? new Token('__SERV',              $curr_token,    $prev_token_line) // For simple tokens like ';', ','...
+                : new Token(token_name($curr_token[0]), $curr_token[1], $curr_token[2]);  // For normal token with type
         }
     }
     
     public function setMaxKey(){
         $this->max_index = $this->tokens->getSize();
-    }
-    
-    /**
-     * @param int $key
-     */
-    public function newIteration($key)
-    {
-        $this->current_key = $key;
-        $this->setIterationTokens();
     }
     
     /**
@@ -276,10 +148,17 @@ class Tokens
      */
     public function setIterationTokens($depth = 4)
     {
-        $this->current = $this->tokens[$this->current_key];
-        for( ; $depth !== 0; $depth-- ){
-            $this->{'next'.$depth} = $this->getToken( 'next', $depth );
-            $this->{'prev'.$depth} = $this->getToken( 'prev', $depth );
+        // Set current token
+        $this->current = $this->tokens[$this->position];
+        
+        // Set previous tokens
+        for( $i = $depth; $i !== 0; $i-- ){
+            $this->{'prev'.$i} = $this->getToken( 'prev', $i );
+        }
+        
+        // Set next tokens
+        for( $i = $depth; $i !== 0; $i-- ){
+            $this->{'next'.$i} = $this->getToken( 'next', $i );
         }
     }
     
@@ -305,18 +184,14 @@ class Tokens
     {
         $group = is_array($group)
             ? $group
-            : $this->{$group . '__token_group'};
+            : $this->groups->$group;
         
-        $token = is_array($token_or_direction) || $token_or_direction instanceof ExtendedSplFixedArray
+        /** @var Token $token */
+        $token = $token_or_direction instanceof Token
             ? $token_or_direction
             : $this->getToken($token_or_direction, $steps);
         
-        return isset($token[0], $group) && in_array($token[0], $group, true);
-    }
-    
-    public function isCurrentTokenInGroup( $group ){
-        $group .= '__token_group';
-        return isset($this->current[0], $this->$group) && in_array($this->current[0], $this->$group, true );
+        return in_array($token->type, $group, true);
     }
     
     public function isNextTokenTypeOfGroup( $group, $steps = 1){
@@ -353,7 +228,7 @@ class Tokens
      */
     public function isCurrentTypeOf($token_type)
     {
-        return $this->current[0] === $token_type;
+        return $this->current->type === $token_type;
     }
     
     /**
@@ -442,7 +317,7 @@ class Tokens
      * @param string|array $needle
      * @param int          $depth of search. How far we should look for the token
      *
-     * @return bool|int
+     * @return false|int Position of the needle
      */
     public function searchForward($start, $needle, $depth = 250)
     {
@@ -510,23 +385,26 @@ class Tokens
      *
      * @return array|null
      */
-    public function getToken($direction, $offset, $key = null)
+    public function getToken($direction, $offset = 0, $key = null)
     {
         $offset      = (int)$offset;
-        $out         = null;
-        $current_key = $key ?: $this->current_key;
+        $out         = new Token(null, null, null);
+        $current_key = isset($key)
+            ? $key
+            : $this->position;
         
         switch($direction){
             case 'next':
-                for( $current_key++, $current_offset = 0; $out === null && $current_key <= $this->max_index; $current_key++ ){
+                for( $current_key++, $current_offset = 0; $out->isEmpty() && $current_key <= $this->max_index; $current_key++ ){
                     $current_offset = isset($this->tokens[$current_key]) ? ++$current_offset           : $current_offset;
-                    $out            = $current_offset === $offset        ? $this->tokens[$current_key] : null;
+                    $out            = $current_offset === $offset        ? $this->tokens[$current_key] : $out;
                 }
                 break;
             case 'prev':
-                for( $current_key--, $current_offset = 0; ! $out && $current_key >= 0; $current_key-- ){
+                for( $current_key--, $current_offset = 0; $out->isEmpty() && $current_key >= 0; $current_key-- ){
                     $current_offset = isset($this->tokens[$current_key]) ? ++$current_offset           : $current_offset;
-                    $out            = $current_offset === $offset        ? $this->tokens[$current_key] : null;
+                    $out            = $current_offset === $offset        ? $this->tokens[$current_key] : $out;
+                    //var_dump( $out);
                 }
                 break;
         }
@@ -535,20 +413,49 @@ class Tokens
     }
     
     /**
-     * Getting prev set lexem, Search for needle === if needle is set
+     * Get the token with passed position (key)
      *
-     * @param int $start
-     * @param int $end
+     * @param int|string|null $position
      *
-     * @return ExtendedSplFixedArray|false
+     * @return Token|null
      */
-    public function getRange($start, $end, $clean_up = true)
+    public function getTokenFromPosition( $position = null, $get_only_actual = false )
     {
-        if( $start !==false && $end !== false ){
+        // If no position was requested, return current token
+        if( ! isset($position) || $position === 'current' ){
+            return $this->current;
+        }
+        
+        $out = false;
+        
+        // Search forward for first actual token
+        for( ; $out === false && $position <= $this->max_index; $position++ ){
+            $out = isset($this->tokens[ $position ])
+                ? $this->tokens[ $position ]
+                : null;
+        }
+        
+        return $out;
+    }
+    
+    /**
+     * Get slice from the current tokens
+     *
+     * @param int  $start    Start key
+     * @param int  $end      End key
+     * @param bool $clean_up Should we clean from null values?
+     *
+     * @return Token[]|false
+     */
+    public function getRange( $start, $end, $clean_up = true)
+    {
+        if( $start !== false && $end !== false ){
             
-            return $clean_up
-                ? ExtendedSplFixedArray::reindex( $this->tokens->slice($start, $end) )
-                : $this->tokens->slice($start, $end);
+            return $this->tokens->slice(
+                $start,
+                $end,
+                $clean_up
+            );
         }
         
         return false;
@@ -557,6 +464,8 @@ class Tokens
     /**
      * Unset token with given names
      *
+     * @todo rename to 'unset'
+     *
      * @param mixed ...$tokens_positions
      */
     public function unsetTokens(...$tokens_positions)
@@ -564,27 +473,28 @@ class Tokens
         foreach( $tokens_positions as $tokens_position ){
             
             if( $tokens_position === 'current' ){
-                $key = $this->current_key;
+                $key = $this->position;
                 
             }else{
                 $direction = substr($tokens_position, 0, 4);
                 $depth     = substr($tokens_position, 4);
                 $key       = $direction === 'next'
-                    ? $this->current_key + $depth
-                    : $this->current_key - $depth;
+                    ? $this->position + $depth
+                    : $this->position - $depth;
             }
             unset($this->tokens[$key]);
             
         }
         
         // Resetting token from prev4 to next4
-        if( ! in_array('current', $tokens_positions, true) ){
-            $this->setIterationTokens();
-        }
+        //if( ! in_array('current', $tokens_positions, true) ){
+        //    $this->setIterationTokens();
+        //}
     }
     
     /**
-     * @todo make it capable to compare variants of sequences. '(' to '(' or  '[',
+     * Compare passed sequence of tokens to the set of token we are work on.
+     * Since all token are standardized we don't have to check guess if the token from the set is array or not.
      *
      * @param int   $position
      * @param array $sequence Array of lexemes
@@ -593,34 +503,56 @@ class Tokens
      */
     public function checkSequenceFromPosition( $position, $sequence ){
         
-        foreach( $sequence as $offset => $token ){
+        foreach( $sequence as $sequence_offset => $token_from_sequence ){
             
-            $position_to_check = $position + $offset;
+            $position_to_check = $position + $sequence_offset;
+            $token_from_set  = $this->getTokenFromPosition($position_to_check, true);
             
-            if( ! isset( $this->tokens[ $position_to_check ] ) ){
-                return false;
-            }
-            
-            // Both is arrays
-            if( is_array( $token ) && is_array( $this->tokens[ $position_to_check ] ) ){
-                
-                // Compare first element
-                if( $token[0] !== $this->tokens[ $position_to_check ][0] ){
-                    return false;
-                    
-                    // Compare second if provided
-                }elseif( isset( $token[1] ) && $token[1] !== $this->tokens[ $position_to_check ][1] ){
-                    return false;
-                }
-                
-                // At least one is not an array. Straight check
-            }elseif( $token !== $this->tokens[ $position_to_check ] ){
-                
+            if(
+                ! $token_from_set ||                                                                   // If the token from the set is not present
+                ! in_array($token_from_set[0], (array) $token_from_sequence[0], true) ||          // Compare first element
+                ( isset( $token_from_sequence[1] ) && $token_from_sequence[1] !== $token_from_set[1] ) // Compare second if provided
+            ){
                 return false;
             }
         }
         
         return true;
+    }
+    
+    public function rewind()
+    {
+        $this->position = 0;
+        $this->max_index = $this->tokens->getSize();
+    }
+    
+    public function key()
+    {
+        return $this->position;
+    }
+    
+    public function current()
+    {
+        return $this->tokens[ $this->position ];
+    }
+    
+    public function next()
+    {
+        $this->position++;
+    }
+    
+    public function valid()
+    {
+        $valid = isset( $this->tokens[ $this->position ] );
+        if( $valid ){
+            $this->setIterationTokens();
+        }
+        
+        return $valid;
+    }
+    
+    public function reindex(){
+        ExtendedSplFixedArray::reindex( $this->tokens );
     }
     
     /**
@@ -645,7 +577,14 @@ class Tokens
     
         // Process name 'current'
         if( $name === 'current' ){
-            $this->$name = $this->tokens[$this->current_key];
+            $this->$name = $this->tokens[$this->position];
+            
+            return $this->$name;
+        }
+        
+        // Get token by the given position. Name example: '_34'. Could be used for debug purposes.
+        if( strpos( $name, '_')){
+            $this->$name = $this->getTokenFromPosition(substr($name, 1));
             
             return $this->$name;
         }
@@ -683,7 +622,7 @@ class Tokens
             
         // Process name 'current'
         }elseif( $name === 'current' ){
-            $this->$name = $this->tokens[$this->current_key];
+            $this->$name = $this->tokens[$this->position];
     
             return isset( $this->$name );
         }

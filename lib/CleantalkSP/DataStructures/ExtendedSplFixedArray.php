@@ -60,56 +60,84 @@ class ExtendedSplFixedArray extends \SplFixedArray
 		return $out;
 	}
 	
-	/**
+    /**
      * Reduce \SplFixedArray by recalculating size and reindex whole \SplFixedArray
      *
-	 * @param \SplFixedArray $splFixedArray
-	 *
-	 * @return bool
-	 */
-	public static function reindex( $splFixedArray )
+     * @param \SplFixedArray $splFixedArray
+     * @param int            $from_key
+     *
+     * @return bool
+     */
+	public static function reindex( $splFixedArray, $from_key = 0 )
 	{
-		$new_key = 0;
+		for(
+		    $max_key = count($splFixedArray),
+		    $new_key = $from_key,
+            $old_key = $from_key;
 		
-		foreach( $splFixedArray as $key => $value ){
-			
-			if( $value === null ){
-				continue;
-			}
-			
-			if( $new_key !== $key ){
-				$splFixedArray[ $new_key ] = $value;
-				unset( $splFixedArray[ $key ] );
-			}
-			
-			$new_key++;
-		}
+		    $old_key < $max_key;
 		
+		    $old_key++
+        ){
+            // Skip null and nonexistent values
+            if( ! isset($splFixedArray[ $old_key ]) ){
+                $unseted[$old_key] = $splFixedArray[ $old_key ];
+                continue;
+            }
+            
+            // Reindex
+            $splFixedArray[ $new_key ] = $splFixedArray[ $old_key ];
+            $new_key++;
+        }
+        
 		// Set new size of \SplFixedArray
-		$splFixedArray->setSize( $new_key );
+		$splFixedArray->setSize( $from_key + $new_key );
 		
 		return true;
 	}
-	
-	/**
-     * Get slice of the current ExtendedSplFixedArray
+    
+    /**
+     * Get slice from the current ExtendedSplFixedArray
+     * Return only not empty values
      *
-	 * @param int $start
-	 * @param int $end
-	 *
-	 * @return ExtendedSplFixedArray
-	 */
-	public function slice( $start, $end ){
+     * @param int  $start    Start key
+     * @param int  $end      End key
+     * @param bool $clean_up Should we clean from null values?
+     *
+     * @return ExtendedSplFixedArray|false
+     */
+	public function slice( $start, $end, $clean_up = true ){
 		
+	    
+	    if( $start === false || $end === false ){
+	        return false;
+        }
+	    
+	    $out = [];
+	    
 		for(
-			$out = array(), $index = $start;
+			$index = $start;
 			$index <= $end;
 			$index++
 		){
-			$out[] = $this[ $index ];
+            // Return only not empty values
+            if( isset($this[ $index ]) ){
+                $out[] = $this[ $index ];
+            
+            // If value is empty extend range
+            }else{
+                $index++;
+            }
 		}
 		
-		return self::createFromArray($out, false);
+        $out = self::createFromArray( $out );
+        
+		// Clean up the null values if needed
+		if( $clean_up ){
+		    self::reindex( $out );
+        }
+		
+		return $out;
 	}
     
     /**
@@ -125,5 +153,14 @@ class ExtendedSplFixedArray extends \SplFixedArray
         array_unshift($temp_arr, $first_elem);
         
         return self::createFromArray($temp_arr);
+    }
+    
+    public function append($appendixes)
+    {
+        $current_size = count($this);
+        $this->setSize( $current_size + count($appendixes) ); // Set a new size
+        foreach( $appendixes as $appendix ){
+            $this[ ++$current_size - 1 ] = $appendix;
+        }
     }
 }

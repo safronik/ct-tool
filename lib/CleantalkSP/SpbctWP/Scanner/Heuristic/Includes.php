@@ -17,7 +17,7 @@ class Includes
     /**
      * @var Tokens
      */
-    private $token_handler;
+    private $tokens;
     
     /**
      * @var Variables
@@ -36,7 +36,7 @@ class Includes
     
     public function __construct(Tokens $tokens_handler, Variables $variables_handler, $current_directory, $is_text)
     {
-        $this->token_handler     = $tokens_handler;
+        $this->tokens            = $tokens_handler;
         $this->variables_handler = $variables_handler;
         $this->current_directory = $current_directory;
         $this->is_text           = $is_text;
@@ -55,9 +55,9 @@ class Includes
         if(
             isset( $tokens[$key + 1] ) &&
             $tokens[$key + 1][1] === '(' &&
-            $this->token_handler->isInGroup('include', $tokens[$key])
+            $this->tokens->isInGroup( 'include', $tokens[$key])
         ){
-            $next_bracket = $this->token_handler->searchForward($key, ')');
+            $next_bracket = $this->tokens->searchForward( $key, ')');
             if( $next_bracket !== false ){
                 unset($tokens[$key + 1], $tokens[$next_bracket]);
                 
@@ -76,23 +76,23 @@ class Includes
      *
      * @return void
      */
-    public function get(&$tokens, $key)
+    public function get($key)
     {
-        if( $this->token_handler->isInGroup('include', $tokens[$key]) ){
+        if( $this->tokens->current->isTypeOf('include') ){
             
             // Get previous "file_exists" function
-            $prev_file_exists__start = $this->token_handler->searchBackward($key, 'file_exists');
+            $prev_file_exists__start = $this->tokens->searchBackward( $key, 'file_exists');
             $prev_file_exists__end   = $prev_file_exists__start
-                ? $this->token_handler->searchForward($prev_file_exists__start, ')')
+                ? $this->tokens->searchForward( $prev_file_exists__start, ')')
                 : null;
             $file_exists        = $prev_file_exists__start && $prev_file_exists__end
-                ? $this->token_handler->getRange($prev_file_exists__start, $prev_file_exists__end)
+                ? $this->tokens->getRange( $prev_file_exists__start, $prev_file_exists__end)
                 : null;
             
             // Get the include
-            $include = $this->token_handler->getRange(
+            $include = $this->tokens->getRange(
                 $key + 1,
-                $this->token_handler->searchForward($key, ';') - 1
+                $this->tokens->searchForward( $key, ';') - 1
             );
             if( $include ){
                 $this->process($include, $file_exists, $key, $tokens);

@@ -25,7 +25,7 @@ class Simplifier
      */
     public function deleteNonCodeTokens( $key )
     {
-        if( $this->tokens->isCurrentTokenInGroup('non_code') ){
+        if( $this->tokens->current->isTypeOf('non_code') ){
             $this->tokens->unsetTokens('current');
             
             return true;
@@ -43,24 +43,24 @@ class Simplifier
      */
     public function stripWhitespaces($key)
     {
-        if( $this->tokens->isCurrentTypeOf('T_WHITESPACE') ){
+        //var_dump( $this->tokens->current->type);
+        if( $this->tokens->current->type === 'T_WHITESPACE' ){
             
             // Completely delete the whitespace if nearby tokens allow it
             if(
-                $this->tokens->current[1] !== ' ' &&
+                //$this->tokens->current->value !== ' ' &&
                 (
-                    $this->tokens->isNextTokenTypeOfGroup('strip_whitespace_around') ||
-                    $this->tokens->isPrevTokenTypeOfGroup('strip_whitespace_around')
+                    $this->tokens->next1->isTypeOf('strip_whitespace_around') ||
+                    $this->tokens->prev1->isTypeOf('strip_whitespace_around')
                 )
             ){
                 $this->tokens->unsetTokens('current');
                 
                 return true;
-            
-            // Otherwise replace it with minimal whitespace
-            }else{
-                $this->tokens->tokens[$key][1] = ' ';
             }
+    
+            // Otherwise, replace it with minimal whitespace
+            $this->tokens->tokens[$key][1] = ' ';
         }
         
         return false;
